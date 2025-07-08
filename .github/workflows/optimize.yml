@@ -6,61 +6,153 @@ on:
 
 jobs:
   process_resource_pack:
-    # Only run if the added label is 'optimize-request'
     if: github.event.label.name == 'optimize-request'
     runs-on: ubuntu-latest
 
+    permissions:
+      issues: write
+      contents: read
+
     steps:
-      - name: Extract .zip link from issue body
+      - name: Extract zip link from issue
         id: extract
         run: |
-          echo "Issue body:"
-          echo "${{ github.event.issue.body }}"
-
-          ZIP_URL=$(echo "${{ github.event.issue.body }}" | grep -oP 'https?://\S+\.zip')
+          ZIP_URL=$(echo "${{ github.event.issue.body }}" | grep -oP 'https?://\S+\.zip' | head -n 1)
 
           if [[ -z "$ZIP_URL" ]]; then
-            echo "No .zip URL found in issue body. Exiting."
+            echo "No .zip URL found in issue body."
+            echo "status=failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+
+          echo "zip_url=$ZIP_URL"
           echo "zip_url=$ZIP_URL" >> "$GITHUB_OUTPUT"
+          echo "status=success" >> "$GITHUB_OUTPUT"
 
       - name: Download and unzip resource pack
         run: |
           mkdir input
           cd input
-          curl -L "${{ steps.extract.outputs.zip_url }}" -o pack.zip
-          unzip pack.zip -d unpacked
+          echo "⬇️ Downloading zip file..."
+          curl -sL "${{ steps.extract.outputs.zip_url }}" -o pack.zip
+
+          echo "📦 Unpacking zip..."
+          unzip -q pack.zip -d unpacked
+
+          echo "✅ Resource pack extracted."
 
       - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y optipng ffmpeg zip
+          sudo apt-get update -qq > /dev/null
+          sudo apt-get install -y -qq optipng ffmpeg zip > /dev/null
 
-      - name: Optimize PNG files
-        run: |
-          find input/unpacked -type f -iname '*.png' | while read -r file; do
-            echo "Optimizing: $file"
-            optipng -o7 "$file"
+          echo "🔍 Verifying installation..."
+          for cmd in optipng ffmpeg zip; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "❌ $cmd not found after installation."
+              exit 1
+            else
+              echo "✅ $cmd is installed: $($cmd --version | head -n 1)"
+            fi
           done
 
-      - name: Compress OGG files
+      - name: Optimize PNG files
+        shell: bash
         run: |
-          find input/unpacked -type f -iname '*.ogg' | while read -r file; do
-            echo "Compressing: $file"
-            ffmpeg -y -i "$file" -ac 1 -ab 64k "${file}.tmp.ogg"
+          set +e  # disable exit-on-error
+          set +o pipefail  # ignore broken pipes from printf
+          echo "🖼️ Scanning PNG files..."
+          mapfile -t FILES < <(find input/unpacked -type f -iname '*.png')
+
+          TOTAL=${#FILES[@]}
+          echo "🖼️ Optimizing $TOTAL PNG files..."
+
+          i=0
+          for file in "${FILES[@]}"; do
+            ((i++))
+            # Output progress quietly, avoid broken pipe crashes
+            { printf "\r[%4d/%4d] %s" "$i" "$TOTAL" "$(basename "$file")"; } || true
+            optipng -o7 -fix "$file" > /dev/null 2>&1 || true
+          done
+
+          echo -e "\n✅ PNG optimization complete."
+
+      - name: Compress OGG files
+        shell: bash
+        run: |
+          set +e
+          set +o pipefail
+          echo "🔊 Scanning OGG files..."
+          mapfile -t FILES < <(find input/unpacked -type f -iname '*.ogg')
+
+          TOTAL=${#FILES[@]}
+          echo "🔊 Compressing $TOTAL OGG files..."
+
+          i=0
+          for file in "${FILES[@]}"; do
+            ((i++))
+            { printf "\r[%4d/%4d] %s" "$i" "$TOTAL" "$(basename "$file")"; } || true
+            ffmpeg -v error -y -i "$file" -ac 1 -ab 64k "${file}.tmp.ogg" > /dev/null 2>&1 || true
             if [[ -f "${file}.tmp.ogg" ]]; then
               mv -f "${file}.tmp.ogg" "$file"
             fi
           done
 
-      - name: Re-zip optimized pack
+          echo -e "\n✅ OGG compression complete."
+
+      - name: Re-zip Packs
         run: |
           cd input/unpacked
           zip -r ../../optimized-pack.zip .
 
-      - name: Upload optimized resource pack
+      - name: Verify Packs
+        run: |
+          if [[ ! -f optimized-pack.zip ]]; then
+            echo "❌ optimized-pack.zip not found!"
+            exit 1
+          else
+            echo "✅ optimized-pack.zip exists."
+            ls -lh optimized-pack.zip
+          fi
+
+      - name: Upload Packs
         uses: actions/upload-artifact@v4
         with:
           name: optimized-pack
           path: optimized-pack.zip
+
+      - name: Comment + Label + Close Issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          REPO="${{ github.repository }}"
+          RUN_ID="${{ github.run_id }}"
+
+          if ! command -v gh > /dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gh
+          fi
+
+          if [[ "${{ steps.extract.outputs.status }}" == "success" && -f optimized-pack.zip ]]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body=$'✅ Optimization complete!\n\nDownload from: https://github.com/'"$REPO"'/actions/runs/'"$RUN_ID"
+
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+              --add-label optimization-success \
+              --remove-label optimize-request
+
+            gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+          else
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body=$'❌ Optimization failed.\n\nEnsure your issue contains a valid public .zip file link.'
+
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+              --add-label optimization-failed \
+              --remove-label optimize-request
+
+            gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+          fi
