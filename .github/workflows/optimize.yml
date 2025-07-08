@@ -16,16 +16,73 @@ jobs:
     steps:
       - name: Extract zip link from issue
         id: extract
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ZIP_URL=$(echo "${{ github.event.issue.body }}" | grep -oP 'https?://\S+\.zip' | head -n 1)
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          REPO="${{ github.repository }}"
 
-          if [[ -z "$ZIP_URL" ]]; then
+          RAW_URL=$(echo "${{ github.event.issue.body }}" | grep -oP 'https?://[^\s)]*\.zip[^\s)]*' | head -n 1)
+
+          if [[ -z "$RAW_URL" ]]; then
             echo "No .zip URL found in issue body."
             echo "status=failed" >> "$GITHUB_OUTPUT"
+
+            echo "❌ Adding invalid-url label due to missing .zip URL"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+              --add-label invalid-url \
+              --remove-label optimize-request
+
             exit 1
           fi
 
-          echo "zip_url=$ZIP_URL"
+          # Fix Dropbox links by ensuring dl=1
+          if [[ "$RAW_URL" =~ dropbox\.com ]]; then
+            ZIP_URL=$(echo "$RAW_URL" | sed -E 's/[?&]dl=[01]//g')
+            if [[ "$ZIP_URL" == *\?* ]]; then
+              ZIP_URL="${ZIP_URL}&dl=1"
+            else
+              ZIP_URL="${ZIP_URL}?dl=1"
+            fi
+          else
+            ZIP_URL="$RAW_URL"
+          fi
+
+          # Check if URL is downloadable
+          if [[ "$ZIP_URL" =~ dropbox\.com ]]; then
+            # Dropbox requires full download to verify
+            if ! curl -s --fail --output /dev/null "$ZIP_URL"; then
+              echo "❌ Dropbox URL not reachable: $ZIP_URL"
+              echo "status=failed" >> "$GITHUB_OUTPUT"
+
+              gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+                --body="❌ Invalid Dropbox URL.\n\nEnsure the link is public and includes \`dl=1\`."
+
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+                --add-label invalid-url \
+                --remove-label optimize-request
+
+              gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+              exit 1
+            fi
+          else
+            # Regular .zip URL check via HTTP headers
+            if ! curl -sI --fail "$ZIP_URL" | grep -q "200 OK"; then
+              echo "❌ URL not responding with 200 OK: $ZIP_URL"
+              echo "status=failed" >> "$GITHUB_OUTPUT"
+
+              gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+                --body="❌ Invalid or unreachable .zip URL provided.\n\nMake sure it is public and ends in \`.zip\`."
+
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+                --add-label invalid-url \
+                --remove-label optimize-request
+
+              gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+              exit 1
+            fi
+          fi
+
           echo "zip_url=$ZIP_URL" >> "$GITHUB_OUTPUT"
           echo "status=success" >> "$GITHUB_OUTPUT"
 
