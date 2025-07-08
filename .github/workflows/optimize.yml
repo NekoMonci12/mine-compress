@@ -157,26 +157,11 @@ jobs:
 
           echo -e "\n✅ OGG compression complete."
 
-      - name: Re-zip Packs
-        run: |
-          cd input/unpacked
-          zip -r ../../optimized-pack.zip .
-
-      - name: Verify Packs
-        run: |
-          if [[ ! -f optimized-pack.zip ]]; then
-            echo "❌ optimized-pack.zip not found!"
-            exit 1
-          else
-            echo "✅ optimized-pack.zip exists."
-            ls -lh optimized-pack.zip
-          fi
-
-      - name: Upload Packs
+      - name: Upload Optimized Folder
         uses: actions/upload-artifact@v4
         with:
           name: optimized-pack
-          path: optimized-pack.zip
+          path: input/unpacked
 
       - name: Comment + Label + Close Issue
         if: always()
@@ -194,7 +179,7 @@ jobs:
             sudo apt-get install -y -qq gh
           fi
 
-          if [[ "${{ steps.extract.outputs.status }}" == "success" && -f optimized-pack.zip ]]; then
+          if [[ "${{ steps.extract.outputs.status }}" == "success" && -d input/unpacked ]]; then
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
               --body=$'✅ Optimization complete!\n\nDownload from: https://github.com/'"$REPO"'/actions/runs/'"$RUN_ID"
 
