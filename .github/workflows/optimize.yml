@@ -149,7 +149,7 @@ jobs:
           for file in "${FILES[@]}"; do
             ((i++))
             { printf "\r[%4d/%4d] %s" "$i" "$TOTAL" "$(basename "$file")"; } || true
-            ffmpeg -v error -y -i "$file" -ac 1 -ab 64k "${file}.tmp.ogg" > /dev/null 2>&1 || true
+            ffmpeg -v error -y -i "$file" -c:a libvorbis -qscale:a 3 "${file}.tmp.ogg" > /dev/null 2>&1 || true
             if [[ -f "${file}.tmp.ogg" ]]; then
               mv -f "${file}.tmp.ogg" "$file"
             fi
