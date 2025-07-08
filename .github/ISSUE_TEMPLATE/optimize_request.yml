@@ -1,0 +1,25 @@
+name: Optimize Resource Pack
+description: Upload your resource pack as a .zip and get back an optimized version.
+title: "[Optimize] Resource Pack Optimization Request"
+labels: [optimize-request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        🎯 **This request will automatically trigger an optimization workflow.**
+        Please ensure your `.zip` file is uploaded somewhere publicly accessible (GitHub, GDrive, Dropbox with direct links, etc).
+
+  - type: input
+    id: zip_link
+    attributes:
+      label: Public Download Link to .zip
+      description: Paste the full URL to the .zip file that contains your resource pack.
+      placeholder: "https://example.com/my-pack.zip"
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes or Extra Info (Optional)
+      description: Add anything else we need to know (e.g. Minecraft version, compression preferences).

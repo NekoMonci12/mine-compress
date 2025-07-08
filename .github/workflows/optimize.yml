@@ -1,0 +1,66 @@
+name: Optimize Resource Pack
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  process_resource_pack:
+    # Only run if the added label is 'optimize-request'
+    if: github.event.label.name == 'optimize-request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract .zip link from issue body
+        id: extract
+        run: |
+          echo "Issue body:"
+          echo "${{ github.event.issue.body }}"
+
+          ZIP_URL=$(echo "${{ github.event.issue.body }}" | grep -oP 'https?://\S+\.zip')
+
+          if [[ -z "$ZIP_URL" ]]; then
+            echo "No .zip URL found in issue body. Exiting."
+            exit 1
+          fi
+          echo "zip_url=$ZIP_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download and unzip resource pack
+        run: |
+          mkdir input
+          cd input
+          curl -L "${{ steps.extract.outputs.zip_url }}" -o pack.zip
+          unzip pack.zip -d unpacked
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y optipng ffmpeg zip
+
+      - name: Optimize PNG files
+        run: |
+          find input/unpacked -type f -iname '*.png' | while read -r file; do
+            echo "Optimizing: $file"
+            optipng -o7 "$file"
+          done
+
+      - name: Compress OGG files
+        run: |
+          find input/unpacked -type f -iname '*.ogg' | while read -r file; do
+            echo "Compressing: $file"
+            ffmpeg -y -i "$file" -ac 1 -ab 64k "${file}.tmp.ogg"
+            if [[ -f "${file}.tmp.ogg" ]]; then
+              mv -f "${file}.tmp.ogg" "$file"
+            fi
+          done
+
+      - name: Re-zip optimized pack
+        run: |
+          cd input/unpacked
+          zip -r ../../optimized-pack.zip .
+
+      - name: Upload optimized resource pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimized-pack
+          path: optimized-pack.zip
